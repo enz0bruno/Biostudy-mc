@@ -10,5 +10,5 @@ export interface StudyContent {
   summary: string;
   images: string[];
   quiz: QuizQuestion[];
-  type: 'Resumo' | 'Trabalho' | 'Lição' | 'Imagens';
+  type: string;
 }

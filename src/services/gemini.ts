@@ -6,15 +6,12 @@ export async function generateStudyContent(
   imagesBase64?: string[], 
   outputType: 'Resumo' | 'Trabalho' | 'Lição' | 'Imagens' = 'Resumo'
 ): Promise<StudyContent> {
-  // Create a new instance right before the call to use the latest API key
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
-  // Special handling for "Imagens" type (Generation or Editing)
   if (outputType === 'Imagens') {
     const contents: any[] = [];
     
     if (imagesBase64 && imagesBase64.length > 0) {
-      // Editing Mode
       imagesBase64.forEach(img => {
         contents.push({
           inlineData: {
@@ -24,28 +21,18 @@ export async function generateStudyContent(
         });
       });
       contents.push({
-        text: `Você é um especialista em edição de diagramas médicos e científicos. 
-        Instrução da Maria Clara: "${topic}". 
-        Aplique as alterações solicitadas (como adicionar setas, legendas, destacar áreas ou explicar partes) diretamente na imagem. 
-        Retorne a imagem editada com altíssima qualidade e fidelidade científica.`
+        text: `Você é um especialista em edição de diagramas médicos e científicos. Instrução: "${topic}". Retorne a imagem editada.`
       });
     } else {
-      // Generation Mode
       contents.push({
-        text: `Gere um diagrama científico/médico de altíssima qualidade sobre: "${topic}". 
-        O diagrama deve ser em Português (PT-BR), com legendas claras, fundo branco e estilo de ilustração profissional. 
-        Foco total na precisão para estudantes de Biomedicina.`
+        text: `Gere um diagrama científico/médico de altíssima qualidade sobre: "${topic}". Fundo branco, legendas em PT-BR.`
       });
     }
 
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-image',
       contents: { parts: contents },
-      config: { 
-        imageConfig: { 
-          aspectRatio: "16:9"
-        } 
-      }
+      config: { imageConfig: { aspectRatio: "16:9" } }
     });
 
     const images: string[] = [];
@@ -56,34 +43,18 @@ export async function generateStudyContent(
     }
 
     return {
-      summary: imagesBase64 && imagesBase64.length > 0 
-        ? "Aqui está a sua imagem editada conforme solicitado." 
-        : `Aqui está o diagrama gerado sobre ${topic}.`,
+      summary: images.length > 0 ? "Aqui está o seu diagrama." : "Não foi possível gerar a imagem.",
       images,
       quiz: [],
       type: 'Imagens'
     };
   }
 
-  const isGeneralOption = topic.includes('Opção Livre');
-  
-  // 1. Generate Summary and Quiz Structure
   const contents: any[] = [
     {
-      text: `Você é um tutor de elite para Maria Clara Mendonça. Seja extremamente rápido e preciso.
-      Tema: "${topic}". Tipo: **${outputType.toUpperCase()}**.
-      
-      Instruções:
-      - **Resumo**: Síntese direta e poderosa.
-      - **Trabalho**: Profundidade acadêmica e estrutura formal.
-      - **Lição**: Passo a passo didático.
-      
-      Gere:
-      1. Conteúdo Markdown COMPLETO. Use placeholders "![Diagrama 1](img_1)" e "![Diagrama 2](img_2)".
-      2. Simulado com 5 questões.
-      3. 2 Prompts de imagem em INGLÊS. Os prompts devem ser: "Scientific educational diagram of [specific sub-topic], clear labels IN PORTUGUESE (PT-BR), medical illustration style, white background, high detail". Garanta que o prompt seja EXTREMAMENTE RELEVANTE ao tema central.
-      
-      Linguagem: Português (Brasil). Nível: Universitário.`
+      text: `Você é um tutor para Maria Clara Mendonça. Tema: "${topic}". Tipo: ${outputType}.
+      Gere: 1. Resumo Markdown. 2. 5 questões de simulado. 3. 2 prompts de imagem em inglês.
+      Retorne APENAS um JSON com as chaves: summary, imagePrompts, quiz.`
     }
   ];
 
@@ -96,7 +67,6 @@ export async function generateStudyContent(
         }
       });
     });
-    contents[0].text += `\n\nAnalise as imagens enviadas e use-as como base.`;
   }
 
   const textResponse = await ai.models.generateContent({
@@ -115,7 +85,7 @@ export async function generateStudyContent(
             items: {
               type: Type.OBJECT,
               properties: {
-                type: { type: Type.STRING, enum: ["multiple-choice", "true-false", "open-ended"] },
+                type: { type: Type.STRING },
                 question: { type: Type.STRING },
                 options: { type: Type.ARRAY, items: { type: Type.STRING } },
                 correctAnswer: { type: Type.STRING },
@@ -131,44 +101,27 @@ export async function generateStudyContent(
   });
 
   const data = JSON.parse(textResponse.text || "{}");
-  let finalSummary = data.summary || "Erro ao gerar conteúdo.";
   const images: string[] = [];
 
   if (data.imagePrompts && Array.isArray(data.imagePrompts) && data.imagePrompts.length > 0) {
-    const imagePromises = data.imagePrompts.slice(0, 2).map(async (prompt: string, index: number) => {
+    const imagePromises = data.imagePrompts.slice(0, 2).map(async (prompt: string) => {
       try {
         const imgResponse = await ai.models.generateContent({
           model: 'gemini-2.5-flash-image',
           contents: { parts: [{ text: prompt }] },
-          config: { 
-            imageConfig: { 
-              aspectRatio: "16:9"
-            } 
-          }
+          config: { imageConfig: { aspectRatio: "16:9" } }
         });
-        
         const part = imgResponse.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-        const base64 = part?.inlineData?.data ? `data:image/png;base64,${part.inlineData.data}` : null;
-        return { index: index + 1, base64 };
-      } catch (e: any) {
-        console.error("Image generation failed:", e);
-        return { index: index + 1, base64: null };
-      }
+        return part?.inlineData?.data ? `data:image/png;base64,${part.inlineData.data}` : null;
+      } catch (e) { return null; }
     });
 
     const results = await Promise.all(imagePromises);
-    results.forEach(res => {
-      if (res.base64) {
-        images.push(res.base64);
-        finalSummary = finalSummary.replace(`img_${res.index}`, res.base64);
-      } else {
-        finalSummary = finalSummary.replace(`![Diagrama ${res.index}](img_${res.index})`, "");
-      }
-    });
+    results.forEach(res => { if (res) images.push(res); });
   }
 
   return {
-    summary: finalSummary,
+    summary: data.summary,
     images,
     quiz: Array.isArray(data.quiz) ? data.quiz : [],
     type: outputType
