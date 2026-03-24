@@ -1,16 +1,255 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BioStudy - Maria Clara Mendonça</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400;1,500;1,600;1,700&display=swap" rel="stylesheet">
-  </head>
-  <body>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #FDFCFB; color: #1A1A1A; }
+        .font-serif { font-family: 'Cormorant+Garamond', serif; }
+        .prose h1, .prose h2, .prose h3 { font-family: 'Cormorant+Garamond', serif; color: #5A5A40; font-weight: 600; margin-top: 1.5em; }
+        .prose p { margin-bottom: 1em; line-height: 1.7; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #5A5A4020; border-radius: 10px; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade { animation: fadeIn 0.5s ease forwards; }
+    </style>
+</head>
+<body>
     <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
+
+    <!-- Scripts: React, Lucide, Gemini SDK -->
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom": "https://esm.sh/react-dom@18.2.0",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "@google/genai": "https://esm.sh/@google/genai@0.2.1",
+        "react-markdown": "https://esm.sh/react-markdown@8.0.7",
+        "jspdf": "https://esm.sh/jspdf@2.5.1",
+        "html2canvas": "https://esm.sh/html2canvas@1.4.1"
+      }
+    }
+    </script>
+
+    <script type="module">
+        import React, { useState, useEffect, useRef } from 'react';
+        import ReactDOM from 'react-dom';
+        import { 
+            GraduationCap, ChevronRight, BookOpen, Brain, Download, ArrowLeft, 
+            Loader2, XCircle, Image as ImageIcon, Trash2, Plus, MessageSquare, 
+            History, Menu, PanelLeftClose, PanelLeftOpen, LogOut, Star 
+        } from 'lucide-react';
+        import Markdown from 'react-markdown';
+        import { GoogleGenAI } from '@google/genai';
+        import { jsPDF } from 'jspdf';
+        import html2canvas from 'html2canvas';
+
+        // --- CONFIGURAÇÃO ---
+        const PREMIUM_EMAIL = "mendoncamariaclara1105@gmail.com";
+        
+        function App() {
+            const [apiKey, setApiKey] = useState(localStorage.getItem('gemini_api_key') || '');
+            const [userEmail, setUserEmail] = useState(localStorage.getItem('biostudy_user') || null);
+            const [step, setStep] = useState('welcome');
+            const [subject, setSubject] = useState(null);
+            const [type, setType] = useState('Lição');
+            const [topic, setTopic] = useState('');
+            const [loading, setLoading] = useState(false);
+            const [content, setContent] = useState(null);
+            const [sessions, setSessions] = useState([]);
+            const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth > 768);
+
+            const isPremium = userEmail === PREMIUM_EMAIL;
+
+            // Salvar chave da API
+            const saveApiKey = (key) => {
+                setApiKey(key);
+                localStorage.setItem('gemini_api_key', key);
+            };
+
+            // Login
+            const handleLogin = (email) => {
+                setUserEmail(email);
+                localStorage.setItem('biostudy_user', email);
+                const saved = localStorage.getItem(`sessions_${email}`);
+                setSessions(saved ? JSON.parse(saved) : []);
+            };
+
+            const handleLogout = () => {
+                setUserEmail(null);
+                localStorage.removeItem('biostudy_user');
+                setStep('welcome');
+            };
+
+            // Lógica da IA (Simplificada para o Single File)
+            const generateContent = async (query) => {
+                if (!apiKey) return alert("Por favor, insira sua chave da API do Gemini.");
+                setLoading(true);
+                setStep('study');
+                
+                try {
+                    const genAI = new GoogleGenAI(apiKey);
+                    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+                    
+                    const prompt = type === 'Desabafo' 
+                        ? `Aja como um ombro amigo para Maria Clara. Ela diz: ${query}`
+                        : `Crie um ${type} detalhado sobre ${subject}: ${query} para Maria Clara Mendonça. Use Markdown.`;
+
+                    const result = await model.generateContent(prompt);
+                    const response = await result.response;
+                    const text = response.text();
+
+                    const newContent = {
+                        id: Date.now(),
+                        topic: query,
+                        text: text,
+                        type: type,
+                        timestamp: new Date().toLocaleString()
+                    };
+
+                    setContent(newContent);
+                    const updatedSessions = [newContent, ...sessions];
+                    setSessions(updatedSessions);
+                    localStorage.setItem(`sessions_${userEmail}`, JSON.stringify(updatedSessions));
+                } catch (error) {
+                    alert("Erro ao falar com a IA. Verifique sua chave.");
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            // --- TELAS ---
+
+            if (!apiKey) {
+                return (
+                    <div className="min-h-screen bg-[#FDFCFB] flex items-center justify-center p-6">
+                        <div className="max-w-md w-full bg-white p-8 rounded-3xl shadow-xl border border-[#5A5A4010]">
+                            <h2 className="font-serif text-2xl text-[#5A5A40] mb-4">Configuração Inicial</h2>
+                            <p className="text-sm text-gray-500 mb-6">Para funcionar no GitHub, você precisa de uma chave da API do Google Gemini (gratuita).</p>
+                            <input 
+                                type="password" 
+                                placeholder="Cole sua API Key aqui..." 
+                                className="w-full p-4 rounded-xl border-2 border-[#5A5A4020] mb-4 outline-none focus:border-[#5A5A40]"
+                                onBlur={(e) => saveApiKey(e.target.value)}
+                            />
+                            <button className="w-full bg-[#5A5A40] text-white py-4 rounded-xl font-bold">Salvar e Continuar</button>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (!userEmail) {
+                return (
+                    <div className="min-h-screen bg-[#FDFCFB] flex items-center justify-center p-6">
+                        <div className="max-w-md w-full bg-white p-10 rounded-[40px] shadow-2xl text-center">
+                            <GraduationCap className="mx-auto text-[#5A5A40] mb-6" size={48} />
+                            <h1 className="font-serif text-4xl text-[#5A5A40] mb-2">BioStudy</h1>
+                            <p className="text-gray-400 mb-8">O espaço exclusivo de Maria Clara</p>
+                            <form onSubmit={(e) => { e.preventDefault(); handleLogin(e.target.email.value); }}>
+                                <input name="email" type="email" placeholder="Seu e-mail" required className="w-full p-4 rounded-2xl border-2 border-gray-100 mb-4 outline-none focus:border-[#5A5A40]" />
+                                <button className="w-full bg-[#5A5A40] text-white py-4 rounded-2xl font-bold shadow-lg hover:bg-[#4A4A30] transition-all">Entrar no Perfil</button>
+                            </form>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="flex h-screen bg-[#FDFCFB]">
+                    {/* Sidebar */}
+                    <aside className={`${isSidebarOpen ? 'w-72' : 'w-0'} bg-white border-r border-gray-100 transition-all duration-300 overflow-hidden flex flex-col`}>
+                        <div className="p-6 border-b border-gray-50 flex items-center gap-3">
+                            <GraduationCap className="text-[#5A5A40]" />
+                            <span className="font-serif text-xl font-bold text-[#5A5A40]">BioStudy</span>
+                        </div>
+                        <div className="flex-1 p-4 overflow-y-auto custom-scrollbar">
+                            <button onClick={() => setStep('welcome')} className="w-full flex items-center gap-2 p-3 bg-[#5A5A4008] text-[#5A5A40] rounded-xl font-bold text-sm mb-6">
+                                <Plus size={18} /> Novo Estudo
+                            </button>
+                            <div className="space-y-2">
+                                {sessions.map(s => (
+                                    <div key={s.id} onClick={() => setContent(s)} className="p-3 text-sm text-gray-500 hover:bg-gray-50 rounded-lg cursor-pointer truncate">
+                                        {s.topic}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                        <div className="p-6 border-t border-gray-50">
+                            <div className="flex items-center gap-3 mb-4">
+                                <div className="w-10 h-10 bg-[#5A5A40] rounded-full flex items-center justify-center text-white font-bold">
+                                    {userEmail[0].toUpperCase()}
+                                </div>
+                                <div className="truncate">
+                                    <p className="text-xs font-bold truncate">{userEmail}</p>
+                                    {isPremium && <span className="text-[10px] text-amber-500 font-bold flex items-center gap-1"><Star size={10} fill="currentColor"/> PREMIUM</span>}
+                                </div>
+                            </div>
+                            <button onClick={handleLogout} className="text-xs text-red-400 font-bold flex items-center gap-2"><LogOut size={14}/> Sair</button>
+                        </div>
+                    </aside>
+
+                    {/* Main */}
+                    <main className="flex-1 flex flex-col overflow-hidden relative">
+                        <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="absolute top-6 left-6 z-20 p-2 bg-white rounded-lg shadow-md lg:hidden">
+                            <Menu size={20} />
+                        </button>
+
+                        <div className="flex-1 overflow-y-auto p-6 lg:p-12 custom-scrollbar">
+                            {step === 'welcome' ? (
+                                <div className="max-w-2xl mx-auto mt-20 text-center animate-fade">
+                                    <h2 className="font-serif text-5xl text-[#5A5A40] mb-8">Olá, Maria Clara. <br/><span className="italic text-gray-300">O que vamos explorar hoje?</span></h2>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        {['Biologia Celular', 'Anatomia', 'Embriologia', 'Direitos Humanos', 'Desabafo'].map(s => (
+                                            <button key={s} onClick={() => { setSubject(s); setStep('input'); if(s==='Desabafo') setType('Desabafo'); }} className="p-6 bg-white border-2 border-gray-50 rounded-3xl hover:border-[#5A5A40] transition-all text-left group">
+                                                <p className="font-bold text-[#5A5A40] mb-1">{s}</p>
+                                                <p className="text-xs text-gray-300 group-hover:text-[#5A5A4050]">Clique para iniciar</p>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            ) : step === 'input' ? (
+                                <div className="max-w-xl mx-auto mt-20 animate-fade">
+                                    <button onClick={() => setStep('welcome')} className="flex items-center gap-2 text-gray-400 mb-6 hover:text-[#5A5A40]"><ArrowLeft size={16}/> Voltar</button>
+                                    <h3 className="font-serif text-3xl text-[#5A5A40] mb-8">{subject}</h3>
+                                    <textarea 
+                                        className="w-full p-6 rounded-[32px] border-2 border-gray-100 min-h-[200px] outline-none focus:border-[#5A5A40] shadow-inner mb-6"
+                                        placeholder={type === 'Desabafo' ? "Pode falar tudo o que está sentindo..." : "Sobre o que exatamente você quer estudar?"}
+                                        value={topic}
+                                        onChange={(e) => setTopic(e.target.value)}
+                                    ></textarea>
+                                    <button onClick={() => generateContent(topic)} className="w-full bg-[#5A5A40] text-white py-5 rounded-2xl font-bold shadow-xl flex items-center justify-center gap-3">
+                                        {loading ? <Loader2 className="animate-spin" /> : <BookOpen />} Começar
+                                    </button>
+                                </div>
+                            ) : (
+                                <div className="max-w-4xl mx-auto animate-fade prose prose-stone">
+                                    {loading ? (
+                                        <div className="flex flex-col items-center justify-center py-40">
+                                            <Loader2 className="animate-spin text-[#5A5A40] mb-4" size={40} />
+                                            <p className="font-serif text-2xl italic text-gray-300">Criando conteúdo para você...</p>
+                                        </div>
+                                    ) : content && (
+                                        <div className="bg-white p-10 rounded-[40px] shadow-sm border border-gray-50">
+                                            <h1 className="text-4xl mb-8">{content.topic}</h1>
+                                            <Markdown>{content.text}</Markdown>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    </main>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
 </html>
