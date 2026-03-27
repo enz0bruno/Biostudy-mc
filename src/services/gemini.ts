@@ -2,13 +2,27 @@ import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 import { QuizQuestion, StudyContent, Message } from "../types";
 
 export async function generateStudyContent(
+  apiKey: string,
   query: string, 
   imagesBase64?: string[], 
   outputType: 'Resumo' | 'Trabalho' | 'Lição' | 'Imagens' | 'Desabafo' = 'Lição',
   history: Message[] = [],
   onChunk?: (chunk: string) => void
 ): Promise<StudyContent> {
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+  if (!apiKey || apiKey === "MY_GEMINI_API_KEY") {
+    throw new Error("API_KEY_MISSING");
+  }
+  const ai = new GoogleGenAI({ apiKey });
+
+  // Truncate history if it's too long to avoid token limits
+  // Keep the first message (original topic) and the last 6 messages
+  let processedHistory = [...history];
+  if (processedHistory.length > 8) {
+    processedHistory = [
+      processedHistory[0],
+      ...processedHistory.slice(-7)
+    ];
+  }
 
   // Determine the original topic from history or current query
   const originalTopic = history.length > 0 ? (history[0].text) : query;
@@ -21,11 +35,10 @@ export async function generateStudyContent(
       Mantenha as respostas focadas no bem-estar dela. 
       Use uma linguagem acolhedora e reconfortante.`;
 
-    const contents: any[] = history.map(msg => ({
+    const contents: any[] = processedHistory.map(msg => ({
       role: msg.role,
       parts: [{ text: msg.text }]
     }));
-
     contents.push({
       role: 'user',
       parts: [{ text: query }]
@@ -41,11 +54,15 @@ export async function generateStudyContent(
       }
     });
 
+    let hasMore = false;
     for await (const chunk of streamResponse) {
       const text = chunk.text;
       if (text) {
         fullResponse += text;
         if (onChunk) onChunk(fullResponse);
+      }
+      if (chunk.candidates?.[0]?.finishReason === 'MAX_TOKENS') {
+        hasMore = true;
       }
     }
 
@@ -61,7 +78,8 @@ export async function generateStudyContent(
         ...history,
         { role: 'user', text: query },
         { role: 'model', text: fullResponse }
-      ]
+      ],
+      hasMore
     };
   }
 
@@ -136,7 +154,7 @@ export async function generateStudyContent(
       3. RESUMO (Tipo: 'Resumo'):
          - Mesmo sendo um resumo, deve ser COMPLETO e abranger todos os pontos importantes com profundidade, usando tópicos, tabelas (se aplicável) e explicações claras.`;
 
-  const contents: any[] = history.map(msg => ({
+  const contents: any[] = processedHistory.map(msg => ({
     role: msg.role,
     parts: [{ text: msg.text }]
   }));
@@ -148,56 +166,96 @@ export async function generateStudyContent(
 
   // Step 1: Stream the Summary
   let fullSummary = "";
-  const streamResponse = await ai.models.generateContentStream({
-    model: "gemini-3-flash-preview",
-    contents: contents,
-    config: {
-      systemInstruction,
-      thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-    }
-  });
+  let streamResponse;
+  try {
+    streamResponse = await ai.models.generateContentStream({
+      model: "gemini-3.1-pro-preview",
+      contents: contents,
+      config: {
+        systemInstruction,
+        maxOutputTokens: 12000, // Stay below the 16384 limit
+      }
+    });
+  } catch (e) {
+    console.warn("gemini-3.1-pro-preview failed, falling back to gemini-3-flash-preview", e);
+    streamResponse = await ai.models.generateContentStream({
+      model: "gemini-3-flash-preview",
+      contents: contents,
+      config: {
+        systemInstruction,
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+        maxOutputTokens: 12000,
+      }
+    });
+  }
 
+  let hasMore = false;
   for await (const chunk of streamResponse) {
     const text = chunk.text;
     if (text) {
       fullSummary += text;
       if (onChunk) onChunk(fullSummary);
     }
+    if (chunk.candidates?.[0]?.finishReason === 'MAX_TOKENS') {
+      hasMore = true;
+    }
   }
 
   // Step 2: Generate Metadata (Quiz and Image Prompts)
-  const metadataResponse = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
-    contents: [
-      ...contents,
-      { role: 'model', parts: [{ text: fullSummary }] },
-      { role: 'user', parts: [{ text: "Agora, com base no conteúdo acima, gere 5 questões de simulado e 2 prompts de imagem em inglês para ilustrar. Retorne APENAS um JSON com as chaves 'quiz' e 'imagePrompts'." }] }
-    ],
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          imagePrompts: { type: Type.ARRAY, items: { type: Type.STRING } },
-          quiz: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                type: { type: Type.STRING },
-                question: { type: Type.STRING },
-                options: { type: Type.ARRAY, items: { type: Type.STRING } },
-                correctAnswer: { type: Type.STRING },
-                explanation: { type: Type.STRING }
-              },
-              required: ["type", "question", "correctAnswer", "explanation"]
-            }
+  let metadataResponse;
+  const metadataConfig = {
+    responseMimeType: "application/json",
+    maxOutputTokens: 2000, // Metadata should be short
+    responseSchema: {
+      type: Type.OBJECT,
+      properties: {
+        imagePrompts: { type: Type.ARRAY, items: { type: Type.STRING } },
+        quiz: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              type: { type: Type.STRING },
+              question: { type: Type.STRING },
+              options: { type: Type.ARRAY, items: { type: Type.STRING } },
+              correctAnswer: { type: Type.STRING },
+              explanation: { type: Type.STRING }
+            },
+            required: ["type", "question", "correctAnswer", "explanation"]
           }
-        },
-        required: ["imagePrompts", "quiz"]
-      }
+        }
+      },
+      required: ["imagePrompts", "quiz"]
     }
-  });
+  };
+
+  // Truncate summary for metadata if it's too long (approx 30k chars ~ 10k tokens)
+  const truncatedSummaryForMetadata = fullSummary.length > 30000 
+    ? fullSummary.substring(0, 30000) + "... [conteúdo truncado para processamento]" 
+    : fullSummary;
+
+  try {
+    metadataResponse = await ai.models.generateContent({
+      model: "gemini-3.1-pro-preview",
+      contents: [
+        ...contents,
+        { role: 'model', parts: [{ text: truncatedSummaryForMetadata }] },
+        { role: 'user', parts: [{ text: "Agora, com base no conteúdo acima, gere 5 questões de simulado e 2 prompts de imagem em inglês para ilustrar. Retorne APENAS um JSON com as chaves 'quiz' e 'imagePrompts'." }] }
+      ],
+      config: metadataConfig
+    });
+  } catch (e) {
+    console.warn("gemini-3.1-pro-preview failed for metadata, falling back to gemini-3-flash-preview", e);
+    metadataResponse = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: [
+        ...contents,
+        { role: 'model', parts: [{ text: truncatedSummaryForMetadata }] },
+        { role: 'user', parts: [{ text: "Agora, com base no conteúdo acima, gere 5 questões de simulado e 2 prompts de imagem em inglês para ilustrar. Retorne APENAS um JSON com as chaves 'quiz' e 'imagePrompts'." }] }
+      ],
+      config: metadataConfig
+    });
+  }
 
   const data = JSON.parse(metadataResponse.text || "{}");
   const images: string[] = [];
@@ -234,6 +292,7 @@ export async function generateStudyContent(
     images,
     quiz: Array.isArray(data.quiz) ? data.quiz : [],
     type: outputType,
-    history: newHistory
+    history: newHistory,
+    hasMore
   };
 }

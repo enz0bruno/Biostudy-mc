@@ -1,15 +1,453 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { GraduationCap, ChevronRight, BookOpen, Brain, Download, ArrowLeft, Loader2, XCircle, Image as ImageIcon, Trash2, Plus, MessageSquare, History, Menu, PanelLeftClose, PanelLeftOpen, LogOut, User, Star } from 'lucide-react';
+import { GraduationCap, ChevronRight, BookOpen, Brain, Download, ArrowLeft, Loader2, XCircle, Image as ImageIcon, Trash2, Plus, MessageSquare, History, Menu, PanelLeftClose, PanelLeftOpen, LogOut, User, Star, Trophy } from 'lucide-react';
 import Markdown from 'react-markdown';
-import { jsPDF } from 'jspdf';
-import html2canvas from 'html2canvas';
-import { generateStudyContent } from './services/gemini';
-import { StudyContent, Message } from './types';
-import { cn } from './lib/utils';
-import WelcomeScreen from './components/WelcomeScreen';
-import QuizModule from './components/QuizModule';
+import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
 
+// --- TYPES ---
+interface Message {
+  role: 'user' | 'model';
+  text: string;
+}
+
+interface QuizQuestion {
+  type: 'multiple-choice' | 'true-false' | 'open-ended';
+  question: string;
+  options?: string[];
+  correctAnswer: string;
+  explanation: string;
+}
+
+interface StudyContent {
+  id: string;
+  timestamp: number;
+  topic: string;
+  summary: string;
+  images: string[];
+  quiz: QuizQuestion[];
+  type: string;
+  history: Message[];
+  hasMore?: boolean;
+}
+
+// --- UTILS ---
+function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
+}
+
+// --- SERVICES ---
+async function generateStudyContent(
+  apiKey: string,
+  query: string, 
+  imagesBase64?: string[], 
+  outputType: 'Resumo' | 'Trabalho' | 'Lição' | 'Imagens' | 'Desabafo' = 'Lição',
+  history: Message[] = [],
+  onChunk?: (chunk: string) => void
+): Promise<StudyContent> {
+  if (!apiKey || apiKey === "MY_GEMINI_API_KEY") {
+    throw new Error("API_KEY_MISSING");
+  }
+  const ai = new GoogleGenAI({ apiKey });
+
+  let processedHistory = [...history];
+  if (processedHistory.length > 8) {
+    processedHistory = [
+      processedHistory[0],
+      ...processedHistory.slice(-7)
+    ];
+  }
+
+  const originalTopic = history.length > 0 ? (history[0].text) : query;
+
+  if (outputType === 'Desabafo') {
+    const systemInstruction = `Você é um espaço seguro e acolhedor para Maria Clara Mendonça desabafar. 
+      Sua missão é ouvir com empatia, oferecer apoio emocional, ser gentil e nunca julgar. 
+      Responda de forma humana, carinhosa e atenciosa. 
+      Não dê conselhos médicos ou profissionais, apenas seja um ombro amigo. 
+      Mantenha as respostas focadas no bem-estar dela. 
+      Use uma linguagem acolhedora e reconfortante.`;
+
+    const contents: any[] = processedHistory.map(msg => ({
+      role: msg.role,
+      parts: [{ text: msg.text }]
+    }));
+    contents.push({
+      role: 'user',
+      parts: [{ text: query }]
+    });
+
+    let fullResponse = "";
+    const streamResponse = await ai.models.generateContentStream({
+      model: "gemini-3-flash-preview",
+      contents: contents,
+      config: {
+        systemInstruction,
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+      }
+    });
+
+    let hasMore = false;
+    for await (const chunk of streamResponse) {
+      const text = chunk.text;
+      if (text) {
+        fullResponse += text;
+        if (onChunk) onChunk(fullResponse);
+      }
+      if (chunk.candidates?.[0]?.finishReason === 'MAX_TOKENS') {
+        hasMore = true;
+      }
+    }
+
+    return {
+      id: Math.random().toString(36).substring(7),
+      timestamp: Date.now(),
+      topic: "Meu Canto de Desabafo",
+      summary: fullResponse,
+      images: [],
+      quiz: [],
+      type: 'Desabafo',
+      history: [
+        ...history,
+        { role: 'user', text: query },
+        { role: 'model', text: fullResponse }
+      ],
+      hasMore
+    };
+  }
+
+  if (outputType === 'Imagens') {
+    const contents: any[] = [];
+    
+    if (imagesBase64 && imagesBase64.length > 0) {
+      imagesBase64.forEach(img => {
+        contents.push({
+          inlineData: {
+            mimeType: "image/png",
+            data: img.split(',')[1] || img
+          }
+        });
+      });
+      contents.push({
+        text: `Você é um especialista em edição de diagramas médicos e científicos. Instrução: "${query}". Retorne a imagem editada. NÃO ADICIONE TEXTO EXPLICATIVO.`
+      });
+    } else {
+      contents.push({
+        text: `Gere um diagrama científico/médico de altíssima qualidade sobre: "${query}". Fundo branco, legendas em PT-BR. APENAS A IMAGEM, SEM TEXTO ADICIONAL.`
+      });
+    }
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: { parts: contents },
+      config: { imageConfig: { aspectRatio: "16:9" } }
+    });
+
+    const images: string[] = [];
+    for (const part of response.candidates?.[0]?.content?.parts || []) {
+      if (part.inlineData) {
+        images.push(`data:image/png;base64,${part.inlineData.data}`);
+      }
+    }
+
+    return {
+      id: Math.random().toString(36).substring(7),
+      topic: query,
+      summary: "", 
+      images,
+      quiz: [],
+      type: 'Imagens',
+      timestamp: Date.now(),
+      history: [...history, { role: 'user', text: query }, { role: 'model', text: "Imagem gerada." }]
+    };
+  }
+
+  const systemInstruction = `Você é um tutor especializado para Maria Clara Mendonça. 
+      Tema Principal: "${originalTopic}". 
+      Tipo de Saída Solicitado: ${outputType}.
+      
+      INSTRUÇÕES CRÍTICAS DE FORMATO E CONTEÚDO:
+      
+      - VOCÊ ESTÁ EM UM CHAT. O usuário pode pedir correções, adições ou mudanças. Responda sempre mantendo o contexto.
+      - INDEPENDENTE DO TIPO (Resumo, Lição ou Trabalho), você deve entregar o MÁXIMO de conteúdo possível. Seja extremamente detalhado, profundo e extenso por padrão.
+      - NÃO ECONOMIZE PALAVRAS. Se o tema for amplo, escreva tudo o que for relevante.
+      - Só diminua ou resuma se o usuário pedir explicitamente para "resumir mais" ou "diminuir".
+      
+      1. LIÇÃO (Tipo: 'Lição'): 
+         - Crie uma LIÇÃO COMPLETA E ESTRUTURADA.
+         - Deve conter: Introdução Motivadora, Objetivos de Aprendizagem, Explicação Teórica Passo a Passo (MUITO DETALHADA), Exemplos Práticos, Curiosidades e uma Conclusão/Resumo Final.
+         - A lição deve ser longa o suficiente para uma sessão de estudo de 30-60 minutos.
+
+      2. TRABALHO (Tipo: 'Trabalho'):
+         - Crie um "MEGA TRABALHO" acadêmico completo. 
+         - NÃO SE LIMITE. Entregue o MÁXIMO de conteúdo possível (mínimo de 1500-2000 palavras se o tema permitir).
+         - Estrutura: Capa Sugerida, Sumário, Introdução, Desenvolvimento Extenso (dividido em vários tópicos e subtópicos detalhados), Análise Crítica, Conclusão e Referências Bibliográficas.
+
+      3. RESUMO (Tipo: 'Resumo'):
+         - Mesmo sendo um resumo, deve ser COMPLETO e abranger todos os pontos importantes com profundidade, usando tópicos, tabelas (se aplicável) e explicações claras.`;
+
+  const contents: any[] = processedHistory.map(msg => ({
+    role: msg.role,
+    parts: [{ text: msg.text }]
+  }));
+
+  contents.push({
+    role: 'user',
+    parts: [{ text: query }]
+  });
+
+  let fullSummary = "";
+  let streamResponse;
+  try {
+    streamResponse = await ai.models.generateContentStream({
+      model: "gemini-3.1-pro-preview",
+      contents: contents,
+      config: {
+        systemInstruction,
+        maxOutputTokens: 12000,
+      }
+    });
+  } catch (e) {
+    streamResponse = await ai.models.generateContentStream({
+      model: "gemini-3-flash-preview",
+      contents: contents,
+      config: {
+        systemInstruction,
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+        maxOutputTokens: 12000,
+      }
+    });
+  }
+
+  let hasMore = false;
+  for await (const chunk of streamResponse) {
+    const text = chunk.text;
+    if (text) {
+      fullSummary += text;
+      if (onChunk) onChunk(fullSummary);
+    }
+    if (chunk.candidates?.[0]?.finishReason === 'MAX_TOKENS') {
+      hasMore = true;
+    }
+  }
+
+  let metadataResponse;
+  const metadataConfig = {
+    responseMimeType: "application/json",
+    maxOutputTokens: 2000,
+    responseSchema: {
+      type: Type.OBJECT,
+      properties: {
+        imagePrompts: { type: Type.ARRAY, items: { type: Type.STRING } },
+        quiz: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              type: { type: Type.STRING },
+              question: { type: Type.STRING },
+              options: { type: Type.ARRAY, items: { type: Type.STRING } },
+              correctAnswer: { type: Type.STRING },
+              explanation: { type: Type.STRING }
+            },
+            required: ["type", "question", "correctAnswer", "explanation"]
+          }
+        }
+      },
+      required: ["imagePrompts", "quiz"]
+    }
+  };
+
+  const truncatedSummaryForMetadata = fullSummary.length > 30000 
+    ? fullSummary.substring(0, 30000) + "... [conteúdo truncado para processamento]" 
+    : fullSummary;
+
+  try {
+    metadataResponse = await ai.models.generateContent({
+      model: "gemini-3.1-pro-preview",
+      contents: [
+        ...contents,
+        { role: 'model', parts: [{ text: truncatedSummaryForMetadata }] },
+        { role: 'user', parts: [{ text: "Agora, com base no conteúdo acima, gere 5 questões de simulado e 2 prompts de imagem em inglês para ilustrar. Retorne APENAS um JSON com as chaves 'quiz' e 'imagePrompts'." }] }
+      ],
+      config: metadataConfig
+    });
+  } catch (e) {
+    metadataResponse = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: [
+        ...contents,
+        { role: 'model', parts: [{ text: truncatedSummaryForMetadata }] },
+        { role: 'user', parts: [{ text: "Agora, com base no conteúdo acima, gere 5 questões de simulado e 2 prompts de imagem em inglês para ilustrar. Retorne APENAS um JSON com as chaves 'quiz' e 'imagePrompts'." }] }
+      ],
+      config: metadataConfig
+    });
+  }
+
+  const data = JSON.parse(metadataResponse.text || "{}");
+  const images: string[] = [];
+
+  if (data.imagePrompts && Array.isArray(data.imagePrompts) && data.imagePrompts.length > 0) {
+    const imagePromises = data.imagePrompts.slice(0, 2).map(async (prompt: string) => {
+      try {
+        const imgResponse = await ai.models.generateContent({
+          model: 'gemini-2.5-flash-image',
+          contents: { parts: [{ text: prompt }] },
+          config: { imageConfig: { aspectRatio: "16:9" } }
+        });
+        const part = imgResponse.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+        return part?.inlineData?.data ? `data:image/png;base64,${part.inlineData.data}` : null;
+      } catch (e) { return null; }
+    });
+
+    const results = await Promise.all(imagePromises);
+    results.forEach(res => { if (res) images.push(res); });
+  }
+
+  const newHistory: Message[] = [
+    ...history,
+    { role: 'user', text: query },
+    { role: 'model', text: fullSummary }
+  ];
+
+  return {
+    id: Math.random().toString(36).substring(7),
+    timestamp: Date.now(),
+    topic: originalTopic,
+    summary: fullSummary,
+    images,
+    quiz: Array.isArray(data.quiz) ? data.quiz : [],
+    type: outputType,
+    history: newHistory,
+    hasMore
+  };
+}
+
+// --- COMPONENTS ---
+const WelcomeScreen: React.FC<{ onStart: () => void }> = ({ onStart }) => (
+  <motion.div 
+    initial={{ opacity: 0 }} 
+    animate={{ opacity: 1 }} 
+    exit={{ opacity: 0 }}
+    className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-bg-main p-6 text-center"
+  >
+    <div className="mx-auto mb-8 flex h-24 w-24 items-center justify-center rounded-full bg-primary/5 text-primary shadow-sm border border-primary/10">
+      <GraduationCap size={48} strokeWidth={1.5} />
+    </div>
+    <h1 className="font-serif text-5xl font-light tracking-tight text-ink md:text-7xl">
+      Bem-vinda, <span className="italic text-primary/80">Maria Clara</span>
+    </h1>
+    <p className="mt-6 font-serif text-2xl italic text-primary/60 tracking-wide">O que você deseja estudar hoje?</p>
+    <button
+      onClick={onStart}
+      className="mt-12 flex items-center gap-3 rounded-full border border-primary/20 bg-white px-12 py-5 text-xl font-medium text-primary shadow-sm transition-all hover:bg-primary/5 active:scale-95"
+    >
+      Começar meus estudos <ChevronRight size={24} strokeWidth={1.5} />
+    </button>
+
+    <div className="mt-16 max-w-md text-left bg-white/50 p-6 rounded-2xl border border-primary/10">
+      <h4 className="text-xs font-bold uppercase tracking-widest text-primary mb-2">Dica para iPhone/iPad (Safari)</h4>
+      <p className="text-[10px] text-primary/60 leading-relaxed">
+        Se aparecer uma mensagem de "Erro de Cookie" ou "Acesso Negado", vá em: <br/>
+        <strong>Ajustes &gt; Safari &gt; Desativar "Impedir Rastreamento entre Sites"</strong>. <br/>
+        Ou abra o site em uma <strong>Aba Anônima</strong>. Isso acontece por uma proteção do sistema da Apple.
+      </p>
+    </div>
+  </motion.div>
+);
+
+const QuizModule: React.FC<{ questions: QuizQuestion[] }> = ({ questions }) => {
+  const [idx, setIdx] = useState(0);
+  const [answers, setAnswers] = useState<Record<number, string>>({});
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [score, setScore] = useState(0);
+  const [finished, setFinished] = useState(false);
+
+  const q = questions[idx];
+  if (!q) return <div>Sem questões disponíveis.</div>;
+
+  const handleAnswer = (ans: string) => {
+    if (showFeedback) return;
+    setAnswers({ ...answers, [idx]: ans });
+    setShowFeedback(true);
+    if (ans.toLowerCase().trim() === q.correctAnswer.toLowerCase().trim()) setScore(s => s + 1);
+  };
+
+  if (finished) return (
+    <div className="rounded-xl bg-white p-10 text-center shadow-lg">
+      <Trophy className="mx-auto mb-4 text-amber-500" size={64} />
+      <h2 className="font-serif text-3xl text-primary">Simulado Concluído!</h2>
+      <p className="mt-2 text-xl">Você acertou {score} de {questions.length} questões.</p>
+      <button 
+        onClick={() => window.location.reload()} 
+        className="mt-8 rounded-lg bg-primary px-8 py-3 text-white"
+      >
+        Reiniciar
+      </button>
+    </div>
+  );
+
+  return (
+    <div className="rounded-xl bg-white p-8 shadow-md border border-primary/10">
+      <div className="mb-6 flex items-center justify-between">
+        <span className="text-xs font-bold uppercase tracking-widest text-primary/40">Questão {idx + 1} de {questions.length}</span>
+        <div className="h-2 w-32 rounded-full bg-primary/10">
+          <div 
+            className="h-full rounded-full bg-primary transition-all" 
+            style={{ width: `${((idx + 1) / questions.length) * 100}%` }} 
+          />
+        </div>
+      </div>
+      <h3 className="text-xl font-medium leading-relaxed text-ink">{q.question}</h3>
+      <div className="mt-8 space-y-3">
+        {q.type === 'multiple-choice' || q.type === 'true-false' ? (
+          (q.options || ['Verdadeiro', 'Falso']).map((opt, i) => (
+            <button 
+              key={i} 
+              onClick={() => handleAnswer(opt)}
+              className={cn(
+                "w-full rounded-lg border-2 p-4 text-left transition-all", 
+                showFeedback ? (
+                  opt === q.correctAnswer ? "border-green-500 bg-green-50" : 
+                  (answers[idx] === opt ? "border-red-500 bg-red-50" : "border-primary/10")
+                ) : "border-primary/10 hover:border-primary hover:bg-primary/5"
+              )}
+            >
+              {opt}
+            </button>
+          ))
+        ) : (
+          <textarea 
+            disabled={showFeedback}
+            className="w-full rounded-lg border-2 border-primary/10 p-4 focus:border-primary focus:outline-none"
+            placeholder="Sua resposta..."
+            onBlur={(e) => handleAnswer(e.target.value)}
+          />
+        )}
+      </div>
+      {showFeedback && (
+        <div className="mt-6 border-t border-primary/10 pt-6">
+          <div className="rounded-lg bg-bg-main p-4 text-sm text-primary/80">
+            <strong>Explicação:</strong> {q.explanation}
+          </div>
+          <button 
+            onClick={() => { 
+              setShowFeedback(false); 
+              if (idx + 1 < questions.length) setIdx(idx + 1); 
+              else setFinished(true); 
+            }} 
+            className="mt-4 w-full rounded-lg bg-primary py-4 text-white font-bold"
+          >
+            Próxima Questão
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// --- MAIN APP ---
 function App() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [step, setStep] = useState<'welcome' | 'input' | 'study'>('welcome');
@@ -22,6 +460,16 @@ function App() {
   const [activeTab, setActiveTab] = useState<'lesson' | 'quiz'>('lesson');
   const [images, setImages] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [showKeyInput, setShowKeyInput] = useState(false);
+  const [manualKey, setManualKey] = useState(localStorage.getItem('manual_gemini_key') || '');
+
+  const getApiKey = () => {
+    if (manualKey && manualKey.trim() !== "" && manualKey !== "MY_GEMINI_API_KEY") return manualKey;
+    const envKey = process.env.GEMINI_API_KEY;
+    if (envKey && envKey.trim() !== "" && envKey !== "MY_GEMINI_API_KEY") return envKey;
+    // User provided key as fallback
+    return "AIzaSyDqQj_wVCAMH0uRgkX1Yjkx5QIVUFzz5ZA";
+  };
 
   const [isDownloading, setIsDownloading] = useState(false);
   const [chatMessage, setChatMessage] = useState('');
@@ -33,18 +481,21 @@ function App() {
 
   // Load sessions and user from localStorage on mount
   useEffect(() => {
-    const savedSessions = localStorage.getItem('biostudy_sessions');
     const savedUser = localStorage.getItem('biostudy_user');
     
     if (savedUser) {
       setUserEmail(savedUser);
-    }
-    
-    if (savedSessions) {
-      try {
-        setSessions(JSON.parse(savedSessions));
-      } catch (e) {
-        console.error("Failed to load sessions", e);
+      // Load user specific sessions
+      const savedSessions = localStorage.getItem(`biostudy_sessions_${savedUser}`);
+      if (savedSessions) {
+        try {
+          const parsed = JSON.parse(savedSessions);
+          if (Array.isArray(parsed)) {
+            setSessions(parsed);
+          }
+        } catch (e) {
+          console.error("Failed to load sessions", e);
+        }
       }
     }
   }, []);
@@ -79,6 +530,18 @@ function App() {
   };
 
   const isPremium = userEmail === 'mendoncamariaclara1105@gmail.com';
+
+  const handleBack = () => {
+    if (step === 'study') {
+      setStep('input');
+      setSubStep('details');
+      setContent(null);
+    } else if (step === 'input') {
+      if (subStep === 'details') setSubStep('type');
+      else if (subStep === 'type') setSubStep('subject');
+      else setStep('welcome');
+    }
+  };
 
   // Scroll to bottom when history changes
   useEffect(() => {
@@ -131,7 +594,13 @@ function App() {
     }
 
     try {
+      const apiKey = getApiKey();
+      if (!apiKey) {
+        setShowKeyInput(true);
+        throw new Error("API_KEY_MISSING");
+      }
       const res = await generateStudyContent(
+        apiKey,
         `${subject}: ${topic}`, 
         images, 
         type, 
@@ -154,20 +623,31 @@ function App() {
       );
       setContent(res);
       setSessions(prev => [res, ...prev]);
-    } catch (err) {
-      setError("Erro ao gerar conteúdo. Verifique sua chave de API.");
+    } catch (err: any) {
+      const isApiKeyError = err.message === "API_KEY_MISSING" || 
+                           err.message?.includes("API key not valid") || 
+                           err.message?.includes("401") || 
+                           err.message?.includes("403");
+      
+      if (isApiKeyError) {
+        setShowKeyInput(true);
+        setError("Configuração necessária: A chave de acesso à IA não foi detectada ou é inválida.");
+      } else {
+        setError("Erro ao gerar conteúdo. Verifique sua conexão ou a chave de API.");
+      }
       console.error(err);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleRefine = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!chatMessage.trim() || !content) return;
+  const handleRefine = async (e?: React.FormEvent, overrideMsg?: string) => {
+    if (e) e.preventDefault();
+    const msgToUse = overrideMsg || chatMessage;
+    if (!msgToUse.trim() || !content) return;
     
-    const currentMessage = chatMessage;
-    setChatMessage('');
+    const currentMessage = msgToUse;
+    if (!overrideMsg) setChatMessage('');
     setIsRefining(true);
 
     const updatedHistory = [...content.history, { role: 'user' as const, text: currentMessage }];
@@ -175,15 +655,22 @@ function App() {
       if (!prev) return null;
       return {
         ...prev,
-        history: updatedHistory
+        history: updatedHistory,
+        hasMore: false
       };
     });
 
     try {
+      const apiKey = getApiKey();
+      if (!apiKey) {
+        setShowKeyInput(true);
+        throw new Error("API_KEY_MISSING");
+      }
       const res = await generateStudyContent(
+        apiKey,
         currentMessage, 
         [], 
-        type, 
+        content.type as any, 
         updatedHistory,
         (chunk) => {
           setContent(prev => {
@@ -194,15 +681,25 @@ function App() {
             } else {
               newHistory.push({ role: 'model', text: chunk });
             }
-            return { ...prev, summary: chunk, history: newHistory };
+            return { ...prev, history: newHistory };
           });
         }
       );
       setContent(res);
       // Update the session in history
       setSessions(prev => prev.map(s => s.id === res.id ? res : s));
-    } catch (err) {
-      setError("Erro ao refinar conteúdo.");
+    } catch (err: any) {
+      const isApiKeyError = err.message === "API_KEY_MISSING" || 
+                           err.message?.includes("API key not valid") || 
+                           err.message?.includes("401") || 
+                           err.message?.includes("403");
+      
+      if (isApiKeyError) {
+        setShowKeyInput(true);
+        setError("Configuração necessária: A chave de acesso à IA não foi detectada ou é inválida.");
+      } else {
+        setError("Erro ao refinar conteúdo.");
+      }
       console.error(err);
     } finally {
       setIsRefining(false);
@@ -215,6 +712,9 @@ function App() {
     setActiveTab('lesson');
     setTopic(session.topic);
     setType(session.type as any);
+    if (window.innerWidth < 1024) {
+      setIsSidebarOpen(false);
+    }
   };
 
   const deleteSession = (e: React.MouseEvent, id: string) => {
@@ -226,84 +726,8 @@ function App() {
     }
   };
 
-  const downloadPDF = async () => {
-    const el = document.getElementById('study-content-to-export');
-    if (!el || isDownloading) return;
-    
-    try {
-      setIsDownloading(true);
-      const canvas = await html2canvas(el, { 
-        scale: 2,
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff',
-        onclone: (clonedDoc) => {
-          // html2canvas doesn't support modern CSS color functions like oklab/oklch used by Tailwind 4
-          // We force standard colors in the cloned document for the export to avoid the "oklab" error
-          const style = clonedDoc.createElement('style');
-          style.innerHTML = `
-            #study-content-to-export {
-              color: #2C241E !important;
-              background-color: #F9F7F2 !important;
-            }
-            #study-content-to-export * {
-              color-scheme: light !important;
-            }
-            /* Preserve the primary brown color */
-            .text-primary, .prose h1, .prose h2, .prose h3 { color: #8B7355 !important; }
-            .text-ink { color: #2C241E !important; }
-            .text-ink\\/80 { color: rgba(44, 36, 30, 0.8) !important; }
-            .bg-primary { background-color: #8B7355 !important; }
-            .bg-bg-main { background-color: #F9F7F2 !important; }
-            .border-primary\\/10 { border-color: rgba(139, 115, 85, 0.1) !important; }
-            .prose p { color: rgba(44, 36, 30, 0.8) !important; }
-            
-            /* Ensure images are visible and colorful */
-            img { 
-              display: block !important;
-              max-width: 100% !important;
-              height: auto !important;
-              filter: none !important;
-              -webkit-filter: none !important;
-            }
-          `;
-          clonedDoc.head.appendChild(style);
-        }
-      });
-      
-      const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF({
-        orientation: 'portrait',
-        unit: 'mm',
-        format: 'a4'
-      });
-      
-      const imgProps = pdf.getImageProperties(imgData);
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-      
-      // Handle multi-page if content is too long
-      let heightLeft = pdfHeight;
-      let position = 0;
-      const pageHeight = pdf.internal.pageSize.getHeight();
-
-      pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
-      heightLeft -= pageHeight;
-
-      while (heightLeft >= 0) {
-        position = heightLeft - pdfHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
-        heightLeft -= pageHeight;
-      }
-
-      pdf.save(`BioStudy-${topic.slice(0, 20)}.pdf`);
-    } catch (err) {
-      console.error("Erro ao gerar PDF:", err);
-      alert("Não foi possível gerar o PDF. Tente novamente.");
-    } finally {
-      setIsDownloading(false);
-    }
+  const downloadPDF = () => {
+    window.print();
   };
 
   if (!userEmail) {
@@ -351,6 +775,13 @@ function App() {
 
   return (
     <div className="min-h-screen flex bg-bg-main font-sans selection:bg-primary/10 selection:text-primary">
+      {/* Mobile Sidebar Overlay */}
+      {isSidebarOpen && (
+        <div 
+          className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm lg:hidden"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
       {/* Sidebar - History */}
       <aside 
         className={cn(
@@ -360,7 +791,16 @@ function App() {
       >
         <div className="p-4 flex items-center justify-between border-b border-primary/5">
           {isSidebarOpen && (
-            <h1 className="font-serif text-xl text-primary flex items-center gap-2 font-medium tracking-tight">
+            <h1 
+              className="font-serif text-xl text-primary flex items-center gap-2 font-medium tracking-tight cursor-pointer"
+              onClick={() => {
+                setStep('welcome');
+                setContent(null);
+                if (window.innerWidth < 1024) {
+                  setIsSidebarOpen(false);
+                }
+              }}
+            >
               <GraduationCap className="text-primary" /> BioStudy
             </h1>
           )}
@@ -374,7 +814,14 @@ function App() {
 
         <div className="flex-1 overflow-y-auto p-3 space-y-2 no-scrollbar">
           <button 
-            onClick={() => { setStep('input'); setSubStep('subject'); setContent(null); }}
+            onClick={() => { 
+              setStep('input'); 
+              setSubStep('subject'); 
+              setContent(null); 
+              if (window.innerWidth < 1024) {
+                setIsSidebarOpen(false);
+              }
+            }}
             className={cn(
               "flex w-full items-center gap-3 rounded-xl border border-primary/10 p-3 text-primary hover:bg-primary/5 transition-all text-sm font-medium",
               !isSidebarOpen && "justify-center"
@@ -446,6 +893,15 @@ function App() {
       </aside>
 
       <div className="flex-1 flex flex-col min-h-screen relative overflow-hidden">
+        {/* Mobile Menu Button */}
+        {!isSidebarOpen && (
+          <button 
+            onClick={() => setIsSidebarOpen(true)}
+            className="fixed top-4 left-4 z-40 p-2 bg-white rounded-lg shadow-md text-primary lg:hidden"
+          >
+            <Menu size={20} />
+          </button>
+        )}
         <AnimatePresence mode="wait">
           {step === 'welcome' && <WelcomeScreen onStart={() => setStep('input')} />}
           
@@ -573,10 +1029,11 @@ function App() {
               <header className="p-4 border-b border-primary/10 bg-white/80 backdrop-blur-md flex items-center justify-between sticky top-0 z-10">
                 <div className="flex items-center gap-4">
                   <button 
-                    onClick={() => { setStep('input'); setContent(null); }} 
-                    className="p-2 hover:bg-primary/5 rounded-lg text-primary transition-colors"
+                    onClick={handleBack} 
+                    className="flex items-center gap-2 px-4 py-2.5 bg-white border border-primary/20 hover:border-primary rounded-xl text-primary transition-all font-bold text-sm shadow-sm active:scale-95"
                   >
-                    <ArrowLeft size={20}/>
+                    <ArrowLeft size={20} className="stroke-[3px]" />
+                    <span>Voltar</span>
                   </button>
                   <div>
                     <h2 className="text-sm font-bold text-ink truncate max-w-[200px] sm:max-w-md">{topic}</h2>
@@ -614,30 +1071,62 @@ function App() {
                       disabled={isDownloading}
                       onClick={downloadPDF} 
                       className={cn(
-                        "p-2 rounded-lg bg-primary text-white shadow-sm hover:bg-primary-dark transition-all",
+                        "flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-white shadow-md hover:bg-primary-dark transition-all active:scale-95",
                         isDownloading && "opacity-50 cursor-not-allowed"
                       )}
-                      title="Baixar PDF"
                     >
-                      {isDownloading ? <Loader2 size={18} className="animate-spin" /> : <Download size={18}/>}
+                      {isDownloading ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} className="stroke-[2.5px]" />}
+                      <span className="text-xs font-bold">Baixar PDF</span>
                     </button>
                   )}
                 </div>
               </header>
 
-              <div className="flex-1 overflow-y-auto p-4 sm:p-8 space-y-8 custom-scrollbar">
+              <div id="study-content-to-export" className="flex-1 overflow-y-auto p-4 sm:p-8 space-y-8 custom-scrollbar">
                 {loading && type === 'Imagens' ? (
                   <div className="flex h-full flex-col items-center justify-center text-center">
                     <Loader2 className="h-16 w-16 animate-spin text-primary opacity-20" />
                     <h3 className="mt-8 font-serif text-3xl italic text-primary">Criando mágica para Maria Clara...</h3>
                   </div>
                 ) : error ? (
-                  <div className="text-center py-20">
+                  <div className="text-center py-20 max-w-md mx-auto">
                     <XCircle size={48} className="mx-auto text-red-500 mb-4" />
-                    <p className="text-xl text-ink">{error}</p>
+                    <p className="text-xl text-ink mb-6">{error}</p>
+                    
+                    {showKeyInput && (
+                      <div className="bg-white p-6 rounded-2xl shadow-sm border border-primary/10 mb-6 animate-fade">
+                        <div className="flex justify-between items-center mb-4">
+                          <p className="text-xs text-primary/60 font-bold uppercase tracking-widest">Configuração Manual</p>
+                          {manualKey && (
+                            <button 
+                              onClick={() => { setManualKey(''); localStorage.removeItem('manual_gemini_key'); }}
+                              className="text-[10px] text-red-500 hover:underline"
+                            >
+                              Limpar Chave
+                            </button>
+                          )}
+                        </div>
+                        <input 
+                          type="password"
+                          value={manualKey}
+                          placeholder="Cole sua GEMINI_API_KEY aqui..."
+                          className="w-full p-4 rounded-xl border-2 border-primary/20 mb-4 text-sm outline-none focus:border-primary bg-primary/5"
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setManualKey(val);
+                            localStorage.setItem('manual_gemini_key', val);
+                          }}
+                        />
+                        <p className="text-[10px] text-primary/40 text-left leading-relaxed">
+                          A chave é necessária para que a IA funcione. Ela fica salva apenas no seu navegador. 
+                          Se você estiver no celular, certifique-se de copiar a chave completa sem espaços extras.
+                        </p>
+                      </div>
+                    )}
+
                     <button 
-                      onClick={() => setStep('input')} 
-                      className="mt-6 bg-primary text-white px-6 py-2 rounded-lg"
+                      onClick={() => { setError(null); setShowKeyInput(false); setStep('input'); }} 
+                      className="w-full bg-primary text-white px-6 py-3 rounded-xl font-bold hover:bg-primary-dark transition-all"
                     >
                       Tentar Novamente
                     </button>
@@ -666,7 +1155,7 @@ function App() {
                                     <Brain size={16} />
                                     <span className="text-[10px] font-bold uppercase tracking-widest">BioStudy AI</span>
                                   </div>
-                                  <div id={idx === content.history.length - 1 ? "study-content-to-export" : undefined} className="rounded-2xl bg-white p-6 sm:p-10 shadow-md border border-primary/10 w-full">
+                                  <div className="rounded-2xl bg-white p-6 sm:p-10 shadow-md border border-primary/10 w-full">
                                     {type !== 'Imagens' && (
                                       <div className="prose max-w-none">
                                         {msg.text ? (
@@ -710,6 +1199,26 @@ function App() {
                             </div>
                           ))}
                           <div ref={chatEndRef} />
+                          
+                          {content.hasMore && (
+                            <div className="mt-8 p-6 rounded-2xl bg-amber-50 border border-amber-200 flex flex-col items-center text-center gap-4 animate-fade">
+                              <div className="bg-amber-100 p-3 rounded-full text-amber-600">
+                                <Plus size={24} />
+                              </div>
+                              <div>
+                                <h4 className="font-bold text-amber-900">Conteúdo Extenso Detectado</h4>
+                                <p className="text-sm text-amber-700">O tema é muito amplo e a IA atingiu o limite de uma única resposta. Deseja que ela continue de onde parou?</p>
+                              </div>
+                              <button 
+                                onClick={() => {
+                                  handleRefine(undefined, "Continue exatamente de onde parou, com o mesmo nível de detalhe e profundidade.");
+                                }}
+                                className="bg-amber-500 text-white px-6 py-2 rounded-xl font-bold hover:bg-amber-600 transition-all shadow-md"
+                              >
+                                Continuar Agora
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </div>
                     ) : (

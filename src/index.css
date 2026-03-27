@@ -43,3 +43,52 @@
   -ms-overflow-style: none;  /* IE and Edge */
   scrollbar-width: none;  /* Firefox */
 }
+
+@media print {
+  /* Hide everything except the study content */
+  body * {
+    visibility: hidden;
+  }
+  
+  #study-content-to-export, #study-content-to-export * {
+    visibility: visible;
+  }
+  
+  #study-content-to-export {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    background: white !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  /* Ensure page breaks are handled correctly */
+  h1, h2, h3 {
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+  
+  p, blockquote, pre, img, .prose > * {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Force colors for printing */
+  .text-primary { color: #8B7355 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .bg-primary { background-color: #8B7355 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  
+  /* Remove sticky headers and other UI elements that might interfere */
+  header, footer, nav, aside, button, .no-print {
+    display: none !important;
+  }
+
+  /* Adjust margins for A4 */
+  @page {
+    size: A4;
+    margin: 2cm;
+  }
+}

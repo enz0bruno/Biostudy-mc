@@ -26,6 +26,15 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStart }) => (
     >
       Começar meus estudos <ChevronRight size={24} strokeWidth={1.5} />
     </button>
+
+    <div className="mt-16 max-w-md text-left bg-white/50 p-6 rounded-2xl border border-primary/10">
+      <h4 className="text-xs font-bold uppercase tracking-widest text-primary mb-2">Dica para iPhone/iPad (Safari)</h4>
+      <p className="text-[10px] text-primary/60 leading-relaxed">
+        Se aparecer uma mensagem de "Erro de Cookie" ou "Acesso Negado", vá em: <br/>
+        <strong>Ajustes &gt; Safari &gt; Desativar "Impedir Rastreamento entre Sites"</strong>. <br/>
+        Ou abra o site em uma <strong>Aba Anônima</strong>. Isso acontece por uma proteção do sistema da Apple.
+      </p>
+    </div>
   </motion.div>
 );
 

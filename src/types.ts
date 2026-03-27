@@ -20,4 +20,5 @@ export interface StudyContent {
   quiz: QuizQuestion[];
   type: string;
   history: Message[];
+  hasMore?: boolean;
 }
