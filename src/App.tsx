@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { GraduationCap, ChevronRight, BookOpen, Brain, Download, ArrowLeft, Loader2, XCircle, Image as ImageIcon, Trash2, Plus, MessageSquare, History, Menu, PanelLeftClose, PanelLeftOpen, LogOut, User, Star, Trophy } from 'lucide-react';
+import { GraduationCap, ChevronRight, BookOpen, Brain, Download, ArrowLeft, Loader2, XCircle, Image as ImageIcon, Trash2, Plus, MessageSquare, History, Menu, PanelLeftClose, PanelLeftOpen, LogOut, User, Star, Trophy, Sparkles } from 'lucide-react';
 import Markdown from 'react-markdown';
 import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 import { clsx, type ClassValue } from "clsx";
@@ -185,7 +185,12 @@ async function generateStudyContent(
          - Estrutura: Capa Sugerida, Sumário, Introdução, Desenvolvimento Extenso (dividido em vários tópicos e subtópicos detalhados), Análise Crítica, Conclusão e Referências Bibliográficas.
 
       3. RESUMO (Tipo: 'Resumo'):
-         - Mesmo sendo um resumo, deve ser COMPLETO e abranger todos os pontos importantes com profundidade, usando tópicos, tabelas (se aplicável) e explicações claras.`;
+         - Mesmo sendo um resumo, deve ser COMPLETO e abranger todos os pontos importantes com profundidade, usando tópicos, tabelas (se aplicável) e explicações claras.
+         
+      4. PLANO DE ESTUDOS (Tipo: 'Plano de Estudos'):
+         - Crie um cronograma de estudos detalhado e personalizado.
+         - Divida por dias ou sessões, sugira métodos de estudo (como Pomodoro ou Mapas Mentais) e inclua dicas de descanso.
+         - O tom deve ser motivador e organizado.`;
 
   const contents: any[] = processedHistory.map(msg => ({
     role: msg.role,
@@ -324,6 +329,74 @@ async function generateStudyContent(
   };
 }
 
+// --- POMODORO TIMER ---
+const PomodoroTimer: React.FC = () => {
+  const [minutes, setMinutes] = useState(25);
+  const [seconds, setSeconds] = useState(0);
+  const [isActive, setIsActive] = useState(false);
+  const [mode, setMode] = useState<'work' | 'break'>('work');
+
+  useEffect(() => {
+    let interval: any = null;
+    if (isActive) {
+      interval = setInterval(() => {
+        if (seconds > 0) {
+          setSeconds(seconds - 1);
+        } else if (minutes > 0) {
+          setMinutes(minutes - 1);
+          setSeconds(59);
+        } else {
+          clearInterval(interval);
+          setIsActive(false);
+          const nextMode = mode === 'work' ? 'break' : 'work';
+          setMode(nextMode);
+          setMinutes(nextMode === 'work' ? 25 : 5);
+          setSeconds(0);
+          alert(nextMode === 'work' ? "Hora de focar!" : "Hora de descansar!");
+        }
+      }, 1000);
+    } else {
+      clearInterval(interval);
+    }
+    return () => clearInterval(interval);
+  }, [isActive, minutes, seconds, mode]);
+
+  const toggleTimer = () => setIsActive(!isActive);
+  const resetTimer = () => {
+    setIsActive(false);
+    setMode('work');
+    setMinutes(25);
+    setSeconds(0);
+  };
+
+  return (
+    <div className="flex items-center gap-3 bg-primary/5 px-4 py-2 rounded-xl border border-primary/10">
+      <div className="text-sm font-mono font-bold text-primary">
+        {String(minutes).padStart(2, '0')}:{String(seconds).padStart(2, '0')}
+      </div>
+      <div className="flex items-center gap-1">
+        <button 
+          onClick={toggleTimer}
+          className="p-1.5 hover:bg-primary/10 rounded-lg text-primary transition-all"
+          title={isActive ? "Pausar" : "Iniciar"}
+        >
+          {isActive ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} className="rotate-45" />}
+        </button>
+        <button 
+          onClick={resetTimer}
+          className="p-1.5 hover:bg-primary/10 rounded-lg text-primary/40 hover:text-primary transition-all"
+          title="Resetar"
+        >
+          <Trash2 size={14} />
+        </button>
+      </div>
+      <span className="text-[10px] font-bold uppercase tracking-widest text-primary/40 hidden md:inline">
+        {mode === 'work' ? 'Foco' : 'Pausa'}
+      </span>
+    </div>
+  );
+};
+
 // --- COMPONENTS ---
 const WelcomeScreen: React.FC<{ onStart: () => void }> = ({ onStart }) => (
   <motion.div 
@@ -346,12 +419,30 @@ const WelcomeScreen: React.FC<{ onStart: () => void }> = ({ onStart }) => (
       Começar meus estudos <ChevronRight size={24} strokeWidth={1.5} />
     </button>
 
-    <div className="mt-16 max-w-md text-left bg-white/50 p-6 rounded-2xl border border-primary/10">
-      <h4 className="text-xs font-bold uppercase tracking-widest text-primary mb-2">Dica para iPhone/iPad (Safari)</h4>
-      <p className="text-[10px] text-primary/60 leading-relaxed">
-        Se aparecer uma mensagem de "Erro de Cookie" ou "Acesso Negado", vá em: <br/>
-        <strong>Ajustes &gt; Safari &gt; Desativar "Impedir Rastreamento entre Sites"</strong>. <br/>
-        Ou abra o site em uma <strong>Aba Anônima</strong>. Isso acontece por uma proteção do sistema da Apple.
+    <div className="mt-12 grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl">
+      <div className="bg-white/50 backdrop-blur-sm p-6 rounded-2xl border border-primary/10 text-left">
+        <div className="w-10 h-10 bg-primary/10 rounded-xl flex items-center justify-center mb-4">
+          <Sparkles size={20} className="text-primary" />
+        </div>
+        <h3 className="font-bold text-primary text-sm mb-2">Dica do Dia</h3>
+        <p className="text-xs text-primary/60 leading-relaxed italic">
+          "O sucesso é a soma de pequenos esforços repetidos dia após dia. Você consegue, Maria!"
+        </p>
+      </div>
+      <div className="bg-white/50 backdrop-blur-sm p-6 rounded-2xl border border-primary/10 text-left">
+        <div className="w-10 h-10 bg-primary/10 rounded-xl flex items-center justify-center mb-4">
+          <BookOpen size={20} className="text-primary" />
+        </div>
+        <h3 className="font-bold text-primary text-sm mb-2">Novo: Timer Pomodoro</h3>
+        <p className="text-xs text-primary/60 leading-relaxed">
+          Agora você tem um timer de foco integrado para ajudar na sua concentração durante os estudos!
+        </p>
+      </div>
+    </div>
+
+    <div className="mt-8 max-w-md text-left bg-white/30 p-4 rounded-xl border border-primary/5">
+      <p className="text-[9px] text-primary/40 leading-relaxed text-center uppercase tracking-widest font-bold">
+        Dica iPhone: Ajustes &gt; Safari &gt; Desativar "Impedir Rastreamento entre Sites"
       </p>
     </div>
   </motion.div>
@@ -464,9 +555,13 @@ function App() {
   const [manualKey, setManualKey] = useState(localStorage.getItem('manual_gemini_key') || '');
 
   const getApiKey = () => {
-    if (manualKey && manualKey.trim() !== "" && manualKey !== "MY_GEMINI_API_KEY") return manualKey;
-    const envKey = process.env.GEMINI_API_KEY;
-    if (envKey && envKey.trim() !== "" && envKey !== "MY_GEMINI_API_KEY") return envKey;
+    try {
+      if (manualKey && manualKey.trim() !== "" && manualKey !== "MY_GEMINI_API_KEY") return manualKey;
+      const envKey = import.meta.env?.VITE_GEMINI_API_KEY;
+      if (envKey && envKey.trim() !== "" && envKey !== "MY_GEMINI_API_KEY") return envKey;
+    } catch (e) {
+      console.error("Error accessing env keys", e);
+    }
     // User provided key as fallback
     return "AIzaSyDqQj_wVCAMH0uRgkX1Yjkx5QIVUFzz5ZA";
   };
@@ -864,7 +959,7 @@ function App() {
         <div className="p-4 border-t border-primary/5 space-y-2">
           <div className={cn("flex items-center gap-3 p-2 rounded-xl bg-primary/5 border border-primary/10", !isSidebarOpen && "justify-center")}>
             <div className="h-8 w-8 rounded-full bg-primary flex items-center justify-center text-white font-bold text-xs shrink-0">
-              {userEmail[0].toUpperCase()}
+              {userEmail && userEmail.length > 0 ? userEmail[0].toUpperCase() : 'U'}
             </div>
             {isSidebarOpen && (
               <div className="overflow-hidden">
@@ -916,7 +1011,7 @@ function App() {
                   <div className="space-y-8">
                     <h2 className="font-serif text-3xl text-primary">Escolha a <span className="italic">matéria foco</span>:</h2>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      {['Biologia Celular', 'Anatomia', 'Embriologia', 'Direitos Humanos', 'Produção de Textos', 'Consulta Geral', 'Desabafo'].map(s => (
+                      {['Biologia Celular', 'Anatomia', 'Embriologia', 'Direitos Humanos', 'Produção de Textos', 'Plano de Estudos', 'Consulta Geral', 'Desabafo'].map(s => (
                         <button 
                           key={s} 
                           onClick={() => { 
@@ -1066,18 +1161,23 @@ function App() {
                   </div>
 
                   {content && (
-                    <button 
-                      type="button"
-                      disabled={isDownloading}
-                      onClick={downloadPDF} 
-                      className={cn(
-                        "flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-white shadow-md hover:bg-primary-dark transition-all active:scale-95",
-                        isDownloading && "opacity-50 cursor-not-allowed"
-                      )}
-                    >
-                      {isDownloading ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} className="stroke-[2.5px]" />}
-                      <span className="text-xs font-bold">Baixar PDF</span>
-                    </button>
+                    <>
+                      <div className="hidden lg:block">
+                        <PomodoroTimer />
+                      </div>
+                      <button 
+                        type="button"
+                        disabled={isDownloading}
+                        onClick={downloadPDF} 
+                        className={cn(
+                          "flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-white shadow-md hover:bg-primary-dark transition-all active:scale-95",
+                          isDownloading && "opacity-50 cursor-not-allowed"
+                        )}
+                      >
+                        {isDownloading ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} className="stroke-[2.5px]" />}
+                        <span className="text-xs font-bold">Baixar PDF</span>
+                      </button>
+                    </>
                   )}
                 </div>
               </header>
